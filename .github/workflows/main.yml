@@ -1,4 +1,4 @@
-name: NetHunter KeX (VNC)
+name: NetHunter KeX (VNC) - Optimized
 
 on:
   workflow_dispatch:
@@ -19,8 +19,6 @@ jobs:
           Invoke-WebRequest -Uri $vncUrl -OutFile $installerPath
           
           Write-Host "Installing TightVNC as a Service with predefined password..."
-          # معلمات التثبيت الصامت مع تعيين كلمة المرور الإدارية (Control Password)
-          # SET_CONTROLPASSWORD=1 و VALUE_OF_CONTROLPASSWORD تقوم بتعيين كلمة المرور أثناء التثبيت
           $msiArgs = @(
               "/i", "`"$installerPath`"",
               "/quiet",
@@ -38,29 +36,62 @@ jobs:
           )
           
           Start-Process msiexec.exe -ArgumentList $msiArgs -Wait
-          
           Remove-Item $installerPath -Force
-          Write-Host "TightVNC Server installed successfully with password set."
+          Write-Host "TightVNC Server installed successfully."
 
-      - name: Configure TightVNC Port to 9001 and Disable Windows Auth
+      # ========== خطوة التعديل الجديدة (تم دمج كل الإصلاحات هنا) ==========
+      - name: Configure TightVNC (Port, Performance, Wallpaper, Resolution)
         run: |
           $regPath = "HKLM:\SOFTWARE\TightVNC\Server"
+          if (-not (Test-Path $regPath)) { New-Item -Path $regPath -Force | Out-Null }
           
-          # تأكد من وجود مسار الريجستري
-          if (-not (Test-Path $regPath)) {
-              New-Item -Path $regPath -Force | Out-Null
-          }
-          
-          # تعيين المنفذ إلى 9001
+          # --- 1. إصلاح المنفذ والمصادقة ---
           Set-ItemProperty -Path $regPath -Name "RfbPort" -Value 9001 -Type DWord -Force
-          
-          # التأكيد على استخدام مصادقة VNC الأساسية (كلمة المرور التي عيناها)
           Set-ItemProperty -Path $regPath -Name "UseVncAuthentication" -Value 1 -Type DWord -Force
-          
-          # تعطيل مصادقة ويندوز (لا نريد استخدام حسابات المستخدمين)
           Set-ItemProperty -Path $regPath -Name "UseControlAuthentication" -Value 0 -Type DWord -Force
           
-          Write-Host "VNC Port set to 9001. Configuration updated."
+          # --- 2. إصلاح الخلفية السوداء (إظهار الخلفية) ---
+          Set-ItemProperty -Path $regPath -Name "RemoveWallpaper" -Value 0 -Type DWord -Force
+          
+          # --- 3. إصلاح الأداء البطيء (تحسينات السرعة) ---
+          # تعطيل ضغط JPEG (يحسن السرعة)
+          Set-ItemProperty -Path $regPath -Name "AllowJPEG" -Value 0 -Type DWord -Force
+          # استخدام ترميز Tight (الأفضل للسرعة والضغط)
+          Set-ItemProperty -Path $regPath -Name "VideoRecognition" -Value 1 -Type DWord -Force
+          # تقليل دورة فحص الشاشة إلى 100ms لاستجابة أسرع (بدلاً من 1000)
+          Set-ItemProperty -Path $regPath -Name "PollingInterval" -Value 100 -Type DWord -Force
+          # تعطيل تأثيرات المؤشر الفاخرة لتقليل التحديثات المرسلة
+          Set-ItemProperty -Path $regPath -Name "GrabTransparentWindows" -Value 0 -Type DWord -Force
+          Set-ItemProperty -Path $regPath -Name "EnableFileTransfers" -Value 0 -Type DWord -Force
+          
+          # --- 4. إصلاح دقة الشاشة (تثبيت الأبعاد) ---
+          # يفضل اختيار دقة ثابتة مثل 1280x720 (تناسب معظم الهواتف) أو 1920x1080 (للاتصال السريع)
+          # يمكنك تغيير 1280 و 720 إلى الدقة التي تريدها
+          $Width = 1280
+          $Height = 720
+          Set-ItemProperty -Path $regPath -Name "FixedScreenWidth" -Value $Width -Type DWord -Force
+          Set-ItemProperty -Path $regPath -Name "FixedScreenHeight" -Value $Height -Type DWord -Force
+          
+          Write-Host "TightVNC optimized configuration applied (Wallpaper ON, Speed Improved, Resolution: $Width x $Height)."
+
+      - name: Disable Windows Visual Effects for Better VNC Speed
+        run: |
+          # تعطيل تأثيرات ويندوز (الشفافية والأنيميشن) لزيادة سرعة VNC بشكل كبير
+          Write-Host "Disabling Windows transparency and animations to boost VNC performance..."
+          $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects"
+          
+          # تعطيل الشفافية
+          Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "EnableTransparency" -Value 0 -Force
+          
+          # تعطيل أنيميشن النوافذ والقوائم
+          Set-ItemProperty -Path "HKCU:\Control Panel\Desktop" -Name "UserPreferencesMask" -Value ([byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00)) -Force
+          Set-ItemProperty -Path "HKCU:\Control Panel\Desktop\WindowMetrics" -Name "MinAnimate" -Value 0 -Force
+          
+          # إيقاف مؤقت لتطبيق الإعدادات
+          Stop-Process -Name "explorer" -Force -ErrorAction SilentlyContinue
+          Start-Process "explorer.exe"
+          
+          Write-Host "Visual effects disabled."
 
       - name: Configure Firewall for VNC (Port 9001)
         run: |
@@ -78,7 +109,6 @@ jobs:
         run: |
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
           $installerPath = "$env:TEMP\tailscale.msi"
-          
           Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
           Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
           Remove-Item $installerPath -Force
@@ -86,50 +116,37 @@ jobs:
       - name: Establish Tailscale Connection
         run: |
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-vnc-$env:GITHUB_RUN_ID
-          
           $tsIP = $null
           $retries = 0
           while (-not $tsIP -and $retries -lt 10) {
               $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-              if (-not $tsIP) { 
-                  Start-Sleep -Seconds 5 
-              }
+              if (-not $tsIP) { Start-Sleep -Seconds 5 }
               $retries++
           }
-          
-          if (-not $tsIP) {
-              Write-Error "Tailscale IP not assigned."
-              exit 1
-          }
+          if (-not $tsIP) { Write-Error "Tailscale IP not assigned."; exit 1 }
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
           Write-Host "Tailscale IP assigned: $tsIP"
 
       - name: Prevent Sleep and Keep Machine Awake
         run: |
           powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
-
           powercfg /change monitor-timeout-ac 0
           powercfg /change monitor-timeout-dc 0
           powercfg /change standby-timeout-ac 0
           powercfg /change standby-timeout-dc 0
           powercfg /change hibernate-timeout-ac 0
           powercfg /change hibernate-timeout-dc 0
-
           powercfg /setacvalueindex SCHEME_CURRENT SUB_SLEEP UNATTENDSLEEP 0
           powercfg /setactive SCHEME_CURRENT
-
           $code = @"
           using System;
           using System.Runtime.InteropServices;
-
           public class KeepAwake {
               [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
               public static extern uint SetThreadExecutionState(uint esFlags);
-              
               public const uint ES_CONTINUOUS = 0x80000000;
               public const uint ES_SYSTEM_REQUIRED = 0x00000001;
               public const uint ES_DISPLAY_REQUIRED = 0x00000002;
-              
               public static void PreventSleep() {
                   SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
               }
@@ -137,20 +154,17 @@ jobs:
           "@
           Add-Type -TypeDefinition $code -Language CSharp
           [KeepAwake]::PreventSleep()
-
           Write-Host "Power settings updated - Sleep disabled successfully."
 
       - name: Verify VNC Accessibility
         run: |
           Write-Host "Waiting for VNC service to fully initialize..."
           Start-Sleep -Seconds 10
-          
           $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 9001
           if (-not $testResult.TcpTestSucceeded) {
-              Write-Warning "VNC port 9001 might not be reachable yet. Check service status."
-              Get-Service -Name "tvnserver" | Format-List
+              Write-Warning "VNC port 9001 might not be reachable yet."
           } else {
-              Write-Host "VNC port 9001 is accessible via Tailscale."
+              Write-Host "VNC port 9001 is accessible."
           }
 
       - name: Display VNC Credentials and Keep Runner Alive
@@ -163,10 +177,5 @@ jobs:
           Write-Host "👉 Paste this in NetHunter KeX:"
           Write-Host "123123@Llo@$env:TAILSCALE_IP::9001"
           Write-Host "========================================`n"
-          
           Write-Host "The Windows machine will stay awake."
-          
-          while ($true) {
-              Write-Host "." -NoNewline
-              Start-Sleep -Seconds 300
-          }
+          while ($true) { Start-Sleep -Seconds 300 }
