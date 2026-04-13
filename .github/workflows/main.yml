@@ -9,73 +9,69 @@ jobs:
     timeout-minutes: 3600
 
     steps:
-      - name: Download and Install TightVNC Server
+      - name: Download and Install TightVNC Server (Set Password via Installer)
         run: |
-          # رابط تحميل TightVNC (نسخة 64-bit)
+          $vncPassword = "123123@Llo"
           $vncUrl = "https://www.tightvnc.com/download/2.8.85/tightvnc-2.8.85-gpl-setup-64bit.msi"
           $installerPath = "$env:TEMP\tightvnc.msi"
           
           Write-Host "Downloading TightVNC Server..."
           Invoke-WebRequest -Uri $vncUrl -OutFile $installerPath
           
-          Write-Host "Installing TightVNC as a Service..."
-          # تثبيت صامت مع إعداد الخدمة تلقائياً
-          # ADDLOCAL="Server" يعني تثبيت مكونات السيرفر فقط (وليس الـ Viewer)
-          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart", "ADDLOCAL=`"Server`"", "SERVER_REGISTER_AS_SERVICE=1" -Wait
+          Write-Host "Installing TightVNC as a Service with predefined password..."
+          # معلمات التثبيت الصامت مع تعيين كلمة المرور الإدارية (Control Password)
+          # SET_CONTROLPASSWORD=1 و VALUE_OF_CONTROLPASSWORD تقوم بتعيين كلمة المرور أثناء التثبيت
+          $msiArgs = @(
+              "/i", "`"$installerPath`"",
+              "/quiet",
+              "/norestart",
+              "ADDLOCAL=`"Server`"",
+              "SERVER_REGISTER_AS_SERVICE=1",
+              "SET_USEVNC=1",
+              "VALUE_OF_USEVNC=1",
+              "SET_PASSWORD=1",
+              "VALUE_OF_PASSWORD=$vncPassword",
+              "SET_USECONTROLAUTHENTICATION=1",
+              "VALUE_OF_USECONTROLAUTHENTICATION=1",
+              "SET_CONTROLPASSWORD=1",
+              "VALUE_OF_CONTROLPASSWORD=$vncPassword"
+          )
+          
+          Start-Process msiexec.exe -ArgumentList $msiArgs -Wait
           
           Remove-Item $installerPath -Force
-          Write-Host "TightVNC Server installed successfully."
+          Write-Host "TightVNC Server installed successfully with password set."
 
-      - name: Configure TightVNC Server (Port 9001 & Password)
+      - name: Configure TightVNC Port to 9001 and Disable Windows Auth
         run: |
-          $password = "123123@Llo"
-          $vncPasswordFile = "$env:ProgramFiles\TightVNC\tvnserver-passwd.txt"
-          
-          # تعيين كلمة مرور VNC (مطلوبة لـ TightVNC)
-          # نقوم بتشفير كلمة المرور باستخدام الأداة الخاصة بـ TightVNC
-          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          
-          # استخدام الأمر التالي لتوليد ملف كلمة المرور المشفر
-          & "$env:ProgramFiles\TightVNC\tvnserver.exe" -passfile $vncPasswordFile -password $password
-          
-          # إعدادات الريجستري لتغيير المنفذ إلى 9001 وتعطيل مصادقة ويندوز (استخدام كلمة مرور VNC فقط)
           $regPath = "HKLM:\SOFTWARE\TightVNC\Server"
           
-          # إنشاء مسار الريجستري إذا لم يكن موجوداً
+          # تأكد من وجود مسار الريجستري
           if (-not (Test-Path $regPath)) {
               New-Item -Path $regPath -Force | Out-Null
           }
           
-          # تعيين المنفذ 9001
+          # تعيين المنفذ إلى 9001
           Set-ItemProperty -Path $regPath -Name "RfbPort" -Value 9001 -Type DWord -Force
           
-          # تعطيل المصادقة عبر ويندوز (نريد استخدام كلمة مرور VNC فقط)
+          # التأكيد على استخدام مصادقة VNC الأساسية (كلمة المرور التي عيناها)
           Set-ItemProperty -Path $regPath -Name "UseVncAuthentication" -Value 1 -Type DWord -Force
-          Set-ItemProperty -Path $regPath -Name "Password" -Value (Get-Content $vncPasswordFile -Raw) -Force
           
-          # السماح بالاتصالات من أي IP (لأن Tailscale سيتولى الأمان)
-          Set-ItemProperty -Path $regPath -Name "IpAccessControl" -Value "" -Force
+          # تعطيل مصادقة ويندوز (لا نريد استخدام حسابات المستخدمين)
+          Set-ItemProperty -Path $regPath -Name "UseControlAuthentication" -Value 0 -Type DWord -Force
           
-          Write-Host "VNC Port set to 9001 and Password configured."
+          Write-Host "VNC Port set to 9001. Configuration updated."
 
       - name: Configure Firewall for VNC (Port 9001)
         run: |
-          # حذف أي قاعدة قديمة بنفس الاسم
           netsh advfirewall firewall delete rule name="VNC-Tailscale" -ErrorAction SilentlyContinue
-          
-          # إضافة قاعدة جديدة تسمح بالمنفذ 9001
           netsh advfirewall firewall add rule name="VNC-Tailscale" dir=in action=allow protocol=TCP localport=9001
-          
           Write-Host "Firewall rule added for port 9001."
 
       - name: Start TightVNC Service
         run: |
-          # إعادة تشغيل الخدمة لتطبيق التغييرات
           Restart-Service -Name "tvnserver" -Force
-          
-          # التأكد من أن الخدمة تعمل وستبدأ تلقائياً
           Set-Service -Name "tvnserver" -StartupType Automatic
-          
           Write-Host "TightVNC Service is running on port 9001."
 
       - name: Install Tailscale
