@@ -9,7 +9,6 @@ jobs:
     timeout-minutes: 3600
 
     steps:
-      # ========== 1. إنشاء المستخدم الجديد YIRDP ==========
       - name: Create YIRDP User Account
         run: |
           $username = "YIRDP"
@@ -18,22 +17,18 @@ jobs:
           
           Write-Host "Creating local user: $username"
           
-          # حذف المستخدم إذا كان موجوداً مسبقاً (لتجنب الأخطاء)
           if (Get-LocalUser -Name $username -ErrorAction SilentlyContinue) {
               Remove-LocalUser -Name $username -ErrorAction SilentlyContinue
               Start-Sleep -Seconds 2
           }
           
-          # إنشاء المستخدم الجديد
           New-LocalUser -Name $username -Password $securePass -AccountNeverExpires -PasswordNeverExpires -ErrorAction Stop
           
-          # إضافته إلى مجموعة المسؤولين (للصلاحيات الكاملة)
           Add-LocalGroupMember -Group "Administrators" -Member $username -ErrorAction SilentlyContinue
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username -ErrorAction SilentlyContinue
           
           Write-Host "User '$username' created and added to Administrators group."
 
-      # ========== 2. تفعيل تسجيل الدخول التلقائي للمستخدم YIRDP ==========
       - name: Enable Auto-Login for YIRDP User
         run: |
           $username = "YIRDP"
@@ -41,19 +36,30 @@ jobs:
           
           Write-Host "Configuring auto-login for user: $username"
           
-          # إعداد تسجيل الدخول التلقائي في سجل النظام
           $regPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
           
           Set-ItemProperty -Path $regPath -Name "AutoAdminLogon" -Value "1" -Force
           Set-ItemProperty -Path $regPath -Name "DefaultUserName" -Value $username -Force
           Set-ItemProperty -Path $regPath -Name "DefaultPassword" -Value $password -Force
-          
-          # التأكد من أن كلمة المرور لا تُمسح بعد إعادة التشغيل
           Set-ItemProperty -Path $regPath -Name "DefaultDomainName" -Value $env:COMPUTERNAME -Force
           
           Write-Host "Auto-login configured for '$username'."
 
-      # ========== 3. تثبيت TightVNC Server ==========
+      - name: Set Visual Effects for Best Appearance
+        run: |
+          Write-Host "Enabling 'Adjust for best appearance' visual effects..."
+          
+          $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects"
+          if (-not (Test-Path $regPath)) { New-Item -Path $regPath -Force | Out-Null }
+          Set-ItemProperty -Path $regPath -Name "VisualFXSetting" -Value 1 -Type DWord -Force
+          
+          $maskHex = [byte[]](0x9E, 0x3E, 0x07, 0x80, 0x12, 0x00, 0x00, 0x00)
+          Set-ItemProperty -Path "HKCU:\Control Panel\Desktop" -Name "UserPreferencesMask" -Value $maskHex -Force
+          
+          Restart-Service -Name "Themes" -Force -ErrorAction SilentlyContinue
+          
+          Write-Host "Visual effects set to 'Best Appearance' successfully."
+
       - name: Download and Install TightVNC Server
         run: |
           $vncPassword = "123123@Llo"
@@ -84,28 +90,21 @@ jobs:
           Remove-Item $installerPath -Force
           Write-Host "TightVNC Server installed."
 
-      # ========== 4. إعداد TightVNC (المنفذ، الأداء، الخلفية، الدقة) ==========
       - name: Configure TightVNC (Port, Performance, Wallpaper, Resolution)
         run: |
           $regPath = "HKLM:\SOFTWARE\TightVNC\Server"
           if (-not (Test-Path $regPath)) { New-Item -Path $regPath -Force | Out-Null }
           
-          # --- المنفذ والمصادقة ---
           Set-ItemProperty -Path $regPath -Name "RfbPort" -Value 9001 -Type DWord -Force
           Set-ItemProperty -Path $regPath -Name "UseVncAuthentication" -Value 1 -Type DWord -Force
           Set-ItemProperty -Path $regPath -Name "UseControlAuthentication" -Value 0 -Type DWord -Force
-          
-          # --- إظهار الخلفية ---
           Set-ItemProperty -Path $regPath -Name "RemoveWallpaper" -Value 0 -Type DWord -Force
-          
-          # --- تحسينات السرعة ---
           Set-ItemProperty -Path $regPath -Name "AllowJPEG" -Value 0 -Type DWord -Force
           Set-ItemProperty -Path $regPath -Name "VideoRecognition" -Value 1 -Type DWord -Force
           Set-ItemProperty -Path $regPath -Name "PollingInterval" -Value 100 -Type DWord -Force
           Set-ItemProperty -Path $regPath -Name "GrabTransparentWindows" -Value 0 -Type DWord -Force
           Set-ItemProperty -Path $regPath -Name "EnableFileTransfers" -Value 0 -Type DWord -Force
           
-          # --- دقة الشاشة الثابتة ---
           $Width = 1280
           $Height = 720
           Set-ItemProperty -Path $regPath -Name "FixedScreenWidth" -Value $Width -Type DWord -Force
@@ -113,32 +112,18 @@ jobs:
           
           Write-Host "TightVNC configuration complete."
 
-      # ========== 5. تعطيل تأثيرات ويندوز لزيادة السرعة ==========
-      - name: Disable Windows Visual Effects for Better VNC Speed
-        run: |
-          Write-Host "Disabling Windows transparency and animations..."
-          
-          Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "EnableTransparency" -Value 0 -Force -ErrorAction SilentlyContinue
-          Set-ItemProperty -Path "HKCU:\Control Panel\Desktop" -Name "UserPreferencesMask" -Value ([byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00)) -Force -ErrorAction SilentlyContinue
-          Set-ItemProperty -Path "HKCU:\Control Panel\Desktop\WindowMetrics" -Name "MinAnimate" -Value 0 -Force -ErrorAction SilentlyContinue
-          
-          Write-Host "Visual effects disabled."
-
-      # ========== 6. فتح المنفذ 9001 في جدار الحماية ==========
       - name: Configure Firewall for VNC (Port 9001)
         run: |
           netsh advfirewall firewall delete rule name="VNC-Tailscale" -ErrorAction SilentlyContinue
           netsh advfirewall firewall add rule name="VNC-Tailscale" dir=in action=allow protocol=TCP localport=9001
           Write-Host "Firewall rule added for port 9001."
 
-      # ========== 7. تشغيل خدمة TightVNC ==========
       - name: Start TightVNC Service
         run: |
           Restart-Service -Name "tvnserver" -Force
           Set-Service -Name "tvnserver" -StartupType Automatic
           Write-Host "TightVNC Service started."
 
-      # ========== 8. تثبيت Tailscale ==========
       - name: Install Tailscale
         run: |
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
@@ -147,7 +132,6 @@ jobs:
           Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
           Remove-Item $installerPath -Force
 
-      # ========== 9. إنشاء اتصال Tailscale ==========
       - name: Establish Tailscale Connection
         run: |
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-vnc-$env:GITHUB_RUN_ID
@@ -164,7 +148,6 @@ jobs:
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
           Write-Host "Tailscale IP assigned: $tsIP"
 
-      # ========== 10. منع الجهاز من الدخول في وضع السكون ==========
       - name: Prevent Sleep and Keep Machine Awake
         run: |
           powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
@@ -196,7 +179,6 @@ jobs:
           
           Write-Host "Sleep disabled."
 
-      # ========== 11. التحقق من إمكانية الوصول إلى VNC ==========
       - name: Verify VNC Accessibility
         run: |
           Write-Host "Waiting for VNC service to fully initialize..."
@@ -209,7 +191,6 @@ jobs:
               Write-Host "VNC port 9001 is accessible."
           }
 
-      # ========== 12. عرض بيانات الاتصال والإبقاء على الجهاز نشطاً ==========
       - name: Display VNC Credentials and Keep Runner Alive
         run: |
           Write-Host "`n=== NETHUNTER KeX CONNECTION INFO ==="
