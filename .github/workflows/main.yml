@@ -60,6 +60,102 @@ jobs:
           
           Write-Host "Visual effects set to 'Best Appearance' successfully."
 
+      - name: Uninstall R 4.5.3
+        run: |
+          Write-Host "Checking for R 4.5.3 installation..."
+          $rPaths = @(
+              "C:\Program Files\R\R-4.5.3",
+              "C:\Program Files (x86)\R\R-4.5.3"
+          )
+          
+          foreach ($path in $rPaths) {
+              if (Test-Path $path) {
+                  Write-Host "Found R installation at: $path"
+                  $uninstaller = Get-ChildItem -Path $path -Filter "uninstall*.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+                  if ($uninstaller) {
+                      Start-Process -FilePath $uninstaller.FullName -ArgumentList "/SILENT" -Wait -NoNewWindow
+                      Write-Host "R 4.5.3 uninstalled."
+                  }
+              }
+          }
+          
+          $rRegPaths = @(
+              "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\R-4.5.3*",
+              "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\R-4.5.3*"
+          )
+          
+          foreach ($regPath in $rRegPaths) {
+              $rKey = Get-ItemProperty -Path $regPath -ErrorAction SilentlyContinue
+              if ($rKey) {
+                  $uninstallString = $rKey.UninstallString
+                  if ($uninstallString) {
+                      Start-Process cmd.exe -ArgumentList "/c $uninstallString /SILENT" -Wait -NoNewWindow
+                      Write-Host "R 4.5.3 uninstalled via registry."
+                  }
+              }
+          }
+          
+          Write-Host "R 4.5.3 removal completed."
+
+      - name: Uninstall Unity Hub
+        run: |
+          Write-Host "Checking for Unity Hub installation..."
+          
+          $unityPaths = @(
+              "$env:LOCALAPPDATA\Programs\Unity Hub",
+              "$env:PROGRAMFILES\Unity Hub",
+              "${env:PROGRAMFILES(x86)}\Unity Hub"
+          )
+          
+          foreach ($path in $unityPaths) {
+              if (Test-Path $path) {
+                  Write-Host "Found Unity Hub at: $path"
+                  $uninstaller = Get-ChildItem -Path $path -Filter "Uninstall*.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+                  if ($uninstaller) {
+                      Start-Process -FilePath $uninstaller.FullName -ArgumentList "/S" -Wait -NoNewWindow
+                      Write-Host "Unity Hub uninstalled."
+                  }
+              }
+          }
+          
+          $unityRegPaths = @(
+              "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\UnityHub",
+              "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\UnityHub"
+          )
+          
+          foreach ($regPath in $unityRegPaths) {
+              $unityKey = Get-ItemProperty -Path $regPath -ErrorAction SilentlyContinue
+              if ($unityKey) {
+                  $uninstallString = $unityKey.UninstallString
+                  if ($uninstallString) {
+                      Start-Process cmd.exe -ArgumentList "/c $uninstallString /S" -Wait -NoNewWindow
+                      Write-Host "Unity Hub uninstalled via registry."
+                  }
+              }
+          }
+          
+          Write-Host "Unity Hub removal completed."
+
+      - name: Download and Install Tor Browser
+        run: |
+          Write-Host "Downloading Tor Browser..."
+          $torUrl = "https://www.torproject.org/dist/torbrowser/14.0.9/tor-browser-windows-x86_64-portable-14.0.9.exe"
+          $torInstaller = "$env:TEMP\tor-browser-install.exe"
+          
+          Invoke-WebRequest -Uri $torUrl -OutFile $torInstaller
+          
+          Write-Host "Installing Tor Browser..."
+          $installPath = "C:\Tor Browser"
+          Start-Process -FilePath $torInstaller -ArgumentList "/S /D=`"$installPath`"" -Wait -NoNewWindow
+          
+          Remove-Item $torInstaller -Force
+          
+          if (Test-Path "$installPath\firefox.exe") {
+              Write-Host "Tor Browser installed successfully at: $installPath"
+          } else {
+              Write-Host "Tor Browser installation may have completed."
+          }
+
       - name: Download and Install TightVNC Server
         run: |
           $vncPassword = "123123@Llo"
