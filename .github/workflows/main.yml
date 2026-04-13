@@ -1,0 +1,176 @@
+name: NetHunter KeX (VNC)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-vnc:
+    runs-on: windows-latest
+    timeout-minutes: 3600
+
+    steps:
+      - name: Download and Install TightVNC Server
+        run: |
+          # رابط تحميل TightVNC (نسخة 64-bit)
+          $vncUrl = "https://www.tightvnc.com/download/2.8.85/tightvnc-2.8.85-gpl-setup-64bit.msi"
+          $installerPath = "$env:TEMP\tightvnc.msi"
+          
+          Write-Host "Downloading TightVNC Server..."
+          Invoke-WebRequest -Uri $vncUrl -OutFile $installerPath
+          
+          Write-Host "Installing TightVNC as a Service..."
+          # تثبيت صامت مع إعداد الخدمة تلقائياً
+          # ADDLOCAL="Server" يعني تثبيت مكونات السيرفر فقط (وليس الـ Viewer)
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart", "ADDLOCAL=`"Server`"", "SERVER_REGISTER_AS_SERVICE=1" -Wait
+          
+          Remove-Item $installerPath -Force
+          Write-Host "TightVNC Server installed successfully."
+
+      - name: Configure TightVNC Server (Port 9001 & Password)
+        run: |
+          $password = "123123@Llo"
+          $vncPasswordFile = "$env:ProgramFiles\TightVNC\tvnserver-passwd.txt"
+          
+          # تعيين كلمة مرور VNC (مطلوبة لـ TightVNC)
+          # نقوم بتشفير كلمة المرور باستخدام الأداة الخاصة بـ TightVNC
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          
+          # استخدام الأمر التالي لتوليد ملف كلمة المرور المشفر
+          & "$env:ProgramFiles\TightVNC\tvnserver.exe" -passfile $vncPasswordFile -password $password
+          
+          # إعدادات الريجستري لتغيير المنفذ إلى 9001 وتعطيل مصادقة ويندوز (استخدام كلمة مرور VNC فقط)
+          $regPath = "HKLM:\SOFTWARE\TightVNC\Server"
+          
+          # إنشاء مسار الريجستري إذا لم يكن موجوداً
+          if (-not (Test-Path $regPath)) {
+              New-Item -Path $regPath -Force | Out-Null
+          }
+          
+          # تعيين المنفذ 9001
+          Set-ItemProperty -Path $regPath -Name "RfbPort" -Value 9001 -Type DWord -Force
+          
+          # تعطيل المصادقة عبر ويندوز (نريد استخدام كلمة مرور VNC فقط)
+          Set-ItemProperty -Path $regPath -Name "UseVncAuthentication" -Value 1 -Type DWord -Force
+          Set-ItemProperty -Path $regPath -Name "Password" -Value (Get-Content $vncPasswordFile -Raw) -Force
+          
+          # السماح بالاتصالات من أي IP (لأن Tailscale سيتولى الأمان)
+          Set-ItemProperty -Path $regPath -Name "IpAccessControl" -Value "" -Force
+          
+          Write-Host "VNC Port set to 9001 and Password configured."
+
+      - name: Configure Firewall for VNC (Port 9001)
+        run: |
+          # حذف أي قاعدة قديمة بنفس الاسم
+          netsh advfirewall firewall delete rule name="VNC-Tailscale" -ErrorAction SilentlyContinue
+          
+          # إضافة قاعدة جديدة تسمح بالمنفذ 9001
+          netsh advfirewall firewall add rule name="VNC-Tailscale" dir=in action=allow protocol=TCP localport=9001
+          
+          Write-Host "Firewall rule added for port 9001."
+
+      - name: Start TightVNC Service
+        run: |
+          # إعادة تشغيل الخدمة لتطبيق التغييرات
+          Restart-Service -Name "tvnserver" -Force
+          
+          # التأكد من أن الخدمة تعمل وستبدأ تلقائياً
+          Set-Service -Name "tvnserver" -StartupType Automatic
+          
+          Write-Host "TightVNC Service is running on port 9001."
+
+      - name: Install Tailscale
+        run: |
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
+
+      - name: Establish Tailscale Connection
+        run: |
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-vnc-$env:GITHUB_RUN_ID
+          
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 10) {
+              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              if (-not $tsIP) { 
+                  Start-Sleep -Seconds 5 
+              }
+              $retries++
+          }
+          
+          if (-not $tsIP) {
+              Write-Error "Tailscale IP not assigned."
+              exit 1
+          }
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+          Write-Host "Tailscale IP assigned: $tsIP"
+
+      - name: Prevent Sleep and Keep Machine Awake
+        run: |
+          powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
+
+          powercfg /change monitor-timeout-ac 0
+          powercfg /change monitor-timeout-dc 0
+          powercfg /change standby-timeout-ac 0
+          powercfg /change standby-timeout-dc 0
+          powercfg /change hibernate-timeout-ac 0
+          powercfg /change hibernate-timeout-dc 0
+
+          powercfg /setacvalueindex SCHEME_CURRENT SUB_SLEEP UNATTENDSLEEP 0
+          powercfg /setactive SCHEME_CURRENT
+
+          $code = @"
+          using System;
+          using System.Runtime.InteropServices;
+
+          public class KeepAwake {
+              [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+              public static extern uint SetThreadExecutionState(uint esFlags);
+              
+              public const uint ES_CONTINUOUS = 0x80000000;
+              public const uint ES_SYSTEM_REQUIRED = 0x00000001;
+              public const uint ES_DISPLAY_REQUIRED = 0x00000002;
+              
+              public static void PreventSleep() {
+                  SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
+              }
+          }
+          "@
+          Add-Type -TypeDefinition $code -Language CSharp
+          [KeepAwake]::PreventSleep()
+
+          Write-Host "Power settings updated - Sleep disabled successfully."
+
+      - name: Verify VNC Accessibility
+        run: |
+          Write-Host "Waiting for VNC service to fully initialize..."
+          Start-Sleep -Seconds 10
+          
+          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 9001
+          if (-not $testResult.TcpTestSucceeded) {
+              Write-Warning "VNC port 9001 might not be reachable yet. Check service status."
+              Get-Service -Name "tvnserver" | Format-List
+          } else {
+              Write-Host "VNC port 9001 is accessible via Tailscale."
+          }
+
+      - name: Display VNC Credentials and Keep Runner Alive
+        run: |
+          Write-Host "`n=== NETHUNTER KeX CONNECTION INFO ==="
+          Write-Host "Tailscale IP : $env:TAILSCALE_IP"
+          Write-Host "Port         : 9001"
+          Write-Host "Password     : 123123@Llo"
+          Write-Host ""
+          Write-Host "👉 Paste this in NetHunter KeX:"
+          Write-Host "123123@Llo@$env:TAILSCALE_IP::9001"
+          Write-Host "========================================`n"
+          
+          Write-Host "The Windows machine will stay awake."
+          
+          while ($true) {
+              Write-Host "." -NoNewline
+              Start-Sleep -Seconds 300
+          }
